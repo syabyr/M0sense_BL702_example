@@ -279,11 +279,11 @@ __STATIC_INLINE uint8_t DAP_GetProductFirmwareVersionString (char *str) {
 
 
 // BL702 GPIO Pins
-#define PIN_SWCLK_TCK 15
-#define PIN_SWDIO_TMS 2
-#define PIN_TDI       0
-#define PIN_TDO       1
-#define PIN_nRESET    24
+#define PIN_SWCLK_TCK 0
+#define PIN_SWDIO_TMS 1
+#define PIN_TDI       26
+#define PIN_TDO       27
+#define PIN_nRESET    23
 #define LED_CONNECTED 9
 #define LED_RUNNING   17
 
