@@ -38,7 +38,7 @@ if [ "$1" != "" ]; then
     # These apps use their own USB descriptors (not compatible with usb_stdio CDC ACM)
     # so USBSTDIO must be disabled
     case "$APP" in
-        usb2dualuart|usb_daplink)
+        usb2dualuart|usb_daplink|rv_dap_plus)
             SUPPORT_USBSTDIO_ENABLE=n
             ;;
     esac
@@ -57,7 +57,22 @@ git am --signoff --keep-cr ../misc/sdk_patch/*.patch
 echo "Apply patch for you!"
 fi
 
-make APP=$APP APP_DIR=../$APP_DIR BOARD=bl702_daplink  SUPPORT_FLOAT=y SUPPORT_USBSTDIO_ENABLE=$SUPPORT_USBSTDIO_ENABLE
+case "$APP" in
+    usb2dualuart)
+        BOARD=bl702_dualuart
+        ;;
+    usb_daplink)
+        BOARD=bl702_daplink
+        ;;
+    rv_dap_plus)
+        BOARD=bl702_dapplus
+        ;;
+    *)
+        BOARD=bl702_iot
+        ;;
+esac
+
+make APP=$APP APP_DIR=../$APP_DIR BOARD=$BOARD SUPPORT_FLOAT=y SUPPORT_USBSTDIO_ENABLE=$SUPPORT_USBSTDIO_ENABLE
 cd ..
 
 TARGET=bl_mcu_sdk/out/$APP_DIR/$APP/${APP}_bl702.bin
