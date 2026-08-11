@@ -6,8 +6,7 @@ set(TARGET_REQUIRED_PRIVATE_INCLUDE ${CMSIS_DAP_DIR}/Include ${BSP_COMMON_DIR}/u
 set(TARGET_REQUIRED_SRCS ${BSP_COMMON_DIR}/usb/usb_dc.c daplink_process.c winusb.c
                          ${CMSIS_DAP_DIR}/Source/DAP.c
                          ${CMSIS_DAP_DIR}/Source/JTAG_DP.c
-                         ${CMSIS_DAP_DIR}/Source/SW_DP.c
-                         uart_interface.c)
+                         ${CMSIS_DAP_DIR}/Source/SW_DP.c)
 
 # Pre-include custom board config files to override SDK defaults before bl702_config.h
 # pulls them in. Their #pragma once / #ifndef guards will then suppress the SDK versions.

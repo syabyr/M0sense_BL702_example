@@ -23,10 +23,8 @@
 #include "hal_uart.h"
 #include "hal_usb.h"
 #include "usbd_core.h"
-#include "usbd_cdc.h"
 #include "usbd_winusb.h"
 #include "hal_gpio.h"
-#include "uart_interface.h"
 
 #define CDC_IN_EP  0x85
 #define CDC_OUT_EP 0x04
@@ -145,45 +143,7 @@ static usbd_endpoint_t dap_endpoint_send = {
     .ep_cb = usb_dap_send_callback
 };
 
-void usbd_cdc_acm_bulk_out(uint8_t ep)
-{
-    usb_dc_receive_to_ringbuffer(usb_fs, &usb_rx_rb, ep);
-}
-
-void usbd_cdc_acm_bulk_in(uint8_t ep)
-{
-    usb_dc_send_from_ringbuffer(usb_fs, &uart1_rx_rb, ep);
-}
-
-void usbd_cdc_acm_set_line_coding(uint32_t baudrate, uint8_t databits, uint8_t parity, uint8_t stopbits)
-{
-    uart1_config(baudrate, databits, parity, stopbits);
-}
-
-void usbd_cdc_acm_set_dtr(bool dtr)
-{
-    //dtr_pin_set(!dtr);
-}
-
-usbd_class_t cdc_class;
-usbd_interface_t cdc_cmd_intf;
-usbd_interface_t cdc_data_intf;
-
-usbd_endpoint_t cdc_out_ep = {
-    .ep_addr = CDC_OUT_EP,
-    .ep_cb = usbd_cdc_acm_bulk_out
-};
-
-usbd_endpoint_t cdc_in_ep = {
-    .ep_addr = CDC_IN_EP,
-    .ep_cb = usbd_cdc_acm_bulk_in
-};
-
-#define UART_DTR_PIN GPIO_PIN_28
-#define UART_RTS_PIN GPIO_PIN_24
-
-/* Override debug UART to UART1 (GPIO25 TX for debug log output).
- * UART0 (GPIO14/15) is reserved for CDC ACM virtual serial port. */
+/* Override debug UART to UART1 (GPIO25 TX for debug log output). */
 enum uart_index_type board_get_debug_uart_index(void)
 {
     return 1;
