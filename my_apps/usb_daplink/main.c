@@ -41,19 +41,19 @@
 #define USBD_LANGID_STRING 1033
 
 #define CMSIS_DAP_INTERFACE_SIZE (9 + 7 + 7)
-#define USB_CONFIG_SIZE          (9 + CMSIS_DAP_INTERFACE_SIZE + CDC_ACM_DESCRIPTOR_LEN)
+#define USB_CONFIG_SIZE          (9 + CMSIS_DAP_INTERFACE_SIZE)
 
+// DAP-only descriptor — no CDC ACM so macOS won't claim the device.
 USB_DESC_SECTION const uint8_t rv_dap_plus_descriptor[] = {
-    USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, 0x0100, 0x01),
+    USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0x00, 0x00, 0x00, USBD_VID, USBD_PID, 0x0100, 0x01),
     /* Configuration 0 */
-    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x03, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    /* Interface 0 */
+    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x01, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
+    /* Interface 0 (CMSIS-DAP) */
     USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x04),
     /* Endpoint OUT 1 */
     USB_ENDPOINT_DESCRIPTOR_INIT(CMSIS_DAP_EP_RECV, USB_ENDPOINT_TYPE_BULK, 0x40, 0x00),
     /* Endpoint IN 2 */
     USB_ENDPOINT_DESCRIPTOR_INIT(CMSIS_DAP_EP_SEND, USB_ENDPOINT_TYPE_BULK, 0x40, 0x00),
-    CDC_ACM_DESCRIPTOR_INIT(0x01, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, 0x00),
     /* String 0 (LANGID) */
     USB_LANGID_INIT(USBD_LANGID_STRING),
     /* String 1 (Manufacturer) */
@@ -182,6 +182,13 @@ usbd_endpoint_t cdc_in_ep = {
 #define UART_DTR_PIN GPIO_PIN_28
 #define UART_RTS_PIN GPIO_PIN_24
 
+/* Override debug UART to UART1 (GPIO25 TX for debug log output).
+ * UART0 (GPIO14/15) is reserved for CDC ACM virtual serial port. */
+enum uart_index_type board_get_debug_uart_index(void)
+{
+    return 1;
+}
+
 extern void gpio_init(void);
 extern void usb_handle(void);
 extern struct device *usb_dc_init(void);
@@ -190,9 +197,9 @@ extern struct usb_msosv1_descriptor msosv1_desc;
 int main(void)
 {
     bflb_platform_init(0);
-    uart_ringbuffer_init();
-    uart1_init();
-    uart1_set_dtr_rts(UART_DTR_PIN, UART_RTS_PIN);
+    // uart_ringbuffer_init();
+    // uart1_init();
+    // uart1_set_dtr_rts(UART_DTR_PIN, UART_RTS_PIN);
 
     usbd_desc_register(rv_dap_plus_descriptor);
 
@@ -203,17 +210,17 @@ int main(void)
     usbd_interface_add_endpoint(&dap_interface, &dap_endpoint_recv);
     usbd_interface_add_endpoint(&dap_interface, &dap_endpoint_send);
 
-    usbd_cdc_add_acm_interface(&cdc_class, &cdc_cmd_intf);
-    usbd_cdc_add_acm_interface(&cdc_class, &cdc_data_intf);
-    usbd_interface_add_endpoint(&cdc_data_intf, &cdc_out_ep);
-    usbd_interface_add_endpoint(&cdc_data_intf, &cdc_in_ep);
+    // usbd_cdc_add_acm_interface(&cdc_class, &cdc_cmd_intf);
+    // usbd_cdc_add_acm_interface(&cdc_class, &cdc_data_intf);
+    // usbd_interface_add_endpoint(&cdc_data_intf, &cdc_out_ep);
+    // usbd_interface_add_endpoint(&cdc_data_intf, &cdc_in_ep);
 
     gpio_init();
 
     usb_fs = usb_dc_init();
 
     if (usb_fs) {
-        device_control(usb_fs, DEVICE_CTRL_SET_INT, (void *)(USB_EP1_DATA_OUT_IT | USB_EP2_DATA_IN_IT | USB_EP4_DATA_OUT_IT | USB_EP5_DATA_IN_IT));
+        device_control(usb_fs, DEVICE_CTRL_SET_INT, (void *)(USB_EP1_DATA_OUT_IT | USB_EP2_DATA_IN_IT));
     }
 
     while (!usb_device_is_configured()) {
@@ -222,6 +229,6 @@ int main(void)
 
     while (1) {
         usb_handle();
-        uart_send_from_ringbuffer();
+        // uart_send_from_ringbuffer();
     }
 }
