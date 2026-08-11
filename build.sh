@@ -41,7 +41,8 @@ if [ "$1" != "" ]; then
 
 fi
 
-if [ "${APP_DIR%%/*}" != "m0sense_apps" -a "$SUPPORT_USBSTDIO_ENABLE" = "y" ]; then
+_APP_DIR_FIRST="${APP_DIR%%/*}"
+if [ "$_APP_DIR_FIRST" != "m0sense_apps" ] && [ "$_APP_DIR_FIRST" != "my_apps" ] && [ "$SUPPORT_USBSTDIO_ENABLE" = "y" ]; then
     echo "not support \`SUPPORT_USBSTDIO_ENABLE=y\` yet, please disable it in build.sh!"
     exit
 fi
