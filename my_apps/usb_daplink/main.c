@@ -25,6 +25,7 @@
 #include "usbd_core.h"
 #include "usbd_winusb.h"
 #include "hal_gpio.h"
+#include "bl702_sec_dbg.h"
 
 #define CDC_IN_EP  0x85
 #define CDC_OUT_EP 0x04
@@ -41,8 +42,8 @@
 #define CMSIS_DAP_INTERFACE_SIZE (9 + 7 + 7)
 #define USB_CONFIG_SIZE          (9 + CMSIS_DAP_INTERFACE_SIZE)
 
-// DAP-only descriptor — no CDC ACM so macOS won't claim the device.
-USB_DESC_SECTION const uint8_t rv_dap_plus_descriptor[] = {
+/* Non-const: serial number is patched at runtime from unique chip ID. */
+static uint8_t rv_dap_plus_descriptor[] = {
     USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0x00, 0x00, 0x00, USBD_VID, USBD_PID, 0x0100, 0x01),
     /* Configuration 0 */
     USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x01, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
@@ -80,8 +81,8 @@ USB_DESC_SECTION const uint8_t rv_dap_plus_descriptor[] = {
     'D', 0,                     // wcChar9
     'A', 0,                     // wcChar10
     'P', 0,                     // wcChar11
-    /* String 3 (Serial Number) */
-    0x1A,                       // bLength
+    /* String 3 (Serial Number) — patched from unique chip ID at init */
+    0x22,                       // bLength (34 = 2 header + 32 data for 16 hex chars)
     USB_DESCRIPTOR_TYPE_STRING, // bDescriptorType
     '0', 0,                     // wcChar0
     '1', 0,                     // wcChar1
@@ -89,12 +90,16 @@ USB_DESC_SECTION const uint8_t rv_dap_plus_descriptor[] = {
     '3', 0,                     // wcChar3
     '4', 0,                     // wcChar4
     '5', 0,                     // wcChar5
-    'A', 0,                     // wcChar6
-    'B', 0,                     // wcChar7
-    'C', 0,                     // wcChar8
-    'D', 0,                     // wcChar9
-    'E', 0,                     // wcChar10
-    'F', 0,                     // wcChar11
+    '6', 0,                     // wcChar6
+    '7', 0,                     // wcChar7
+    '8', 0,                     // wcChar8
+    '9', 0,                     // wcChar9
+    'A', 0,                     // wcChar10
+    'B', 0,                     // wcChar11
+    'C', 0,                     // wcChar12
+    'D', 0,                     // wcChar13
+    'E', 0,                     // wcChar14
+    'F', 0,                     // wcChar15
     /* String 4 (Interface) */
     0x1a,                       // bLength
     USB_DESCRIPTOR_TYPE_STRING, // bDescriptorType
@@ -157,6 +162,21 @@ extern struct usb_msosv1_descriptor msosv1_desc;
 int main(void)
 {
     bflb_platform_init(0);
+
+    /* Patch USB serial number with unique chip ID (8 bytes → 16 hex chars).
+     * Serial string descriptor data starts at byte offset 100:
+     *   offset 98: bLength (0x22), offset 99: bDescriptorType, offset 100..131: data
+     */
+    {
+        uint8_t chip_id[8];
+        static const char hex[] = "0123456789ABCDEF";
+        Sec_Dbg_Read_Chip_ID(chip_id);
+        for (int i = 0; i < 8; i++) {
+            rv_dap_plus_descriptor[100 + i * 4 + 0] = hex[(chip_id[i] >> 4) & 0x0F];
+            rv_dap_plus_descriptor[100 + i * 4 + 2] = hex[ chip_id[i]       & 0x0F];
+        }
+    }
+
     // uart_ringbuffer_init();
     // uart1_init();
     // uart1_set_dtr_rts(UART_DTR_PIN, UART_RTS_PIN);
