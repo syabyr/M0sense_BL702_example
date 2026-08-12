@@ -2,19 +2,161 @@
 
 ## 结论
 
-**可行，SDK 不完整但关键寄存器已齐备，需要一定量的底层开发工作（预计 1-2 天）。**
+**BL702 无独立 PDM 外设**（2026-08-12 硬件探测确认），但可通过内置 **I2S RX** 外设 + 外部 PDM→I2S 桥接芯片实现，
+或直接使用内置 I2S 接口的数字 MEMS 麦克风。
+
+`pdm_reg.h` 存在于 SDK 中，但 I2S (0x4000AA00) 和 CAM (0x4000AD00) 之间的 768 字节地址间隙均无硬件响应——PDM 寄存器定义
+可能是为 BL704/BL706 或其他系列芯片准备的，BL702 硅片上未实现。
+
+**推荐方案：PDM Mic → PDM→I2S Bridge (IA611) → BL702 I2S RX → DMA → 内存**
 
 ---
 
-## 1. 硬件条件
+## 1. 硬件探测结果 (2026-08-12)
 
-### 1.1 PDM 外设寄存器
-
-BL702 内置了 PDM 硬件模块，寄存器定义文件位于 SDK 内：
+使用 `my_apps/pdm_probe` 固件对 I2S (0x4000AA00) 到 CAM (0x4000AD00) 之间的地址间隙进行了读写验证：
 
 ```
-bl_mcu_sdk/drivers/bl702_driver/regs/pdm_reg.h
+  I2S  (0x4000AA00)    rst=0x00005001  wr=0x00005001  [STICK]   ← 外设存在
+  Gap  (0x4000AB00)    rst=0x00000000  wr=0x00000000  [IGNORE]  ← 空
+  Gap  (0x4000AC00)    rst=0x00000004  wr=0x00000004  [IGNORE]  ← 空(ghost read)
+  CAM  (0x4000AD00)    rst=0x4000083C  wr=0x4000083D  [STICK]   ← 外设存在
 ```
+
+| 结论 | 说明 |
+|---|---|
+| ❌ 无独立 PDM 硬件 | 0xAB00/0xAC00 写操作不生效 |
+| ❌ 软件 CIC 不可行 | CPU 不能承受 3 MHz GPIO 中断 |
+| ✅ I2S 外设正常 | 写确认，DMA 通道就绪 |
+| ✅ CAM 外设正常 | 写确认，对照组 |
+
+## 2. 推荐方案：PDM→I2S 桥接芯片
+
+### 2.1 信号通路
+
+```
+PDM Mic ──► PDM→I2S Bridge ──► BL702 I2S RX (0x4000AA00) ──► DMA CH3 ──► 内存
+  CLK/DATA    (IA611等)           BCLK/FS/DI (GPIO0/1/23)      (已验证)
+```
+
+### 2.2 推荐的桥接芯片
+
+| 芯片 | 通道数 | 接口 | 参考价格 |
+|---|---|---|---|
+| Knowles IA611 | 1-ch | I2S (直接输出) | ~$1.5 |
+| Vesper VM3011 | 1-ch | I2S (PDM→I2S 内建) | ~$2 |
+| TI TLV320ADCx140 | 4-ch | I2S/TDM | ~$5 |
+
+### 2.3 或直接使用 I2S 数字麦克风
+
+部分 MEMS 麦克风直接输出 I2S 格式，无需桥接转换：
+
+| 芯片 | 输出 | 备注 |
+|---|---|---|
+| Knowles SPH0645LM4H | I2S 24-bit | 单声道 |
+| InvenSense ICS-43432 | I2S 24-bit | 低噪声 |
+| Vesper VM3000 | I2S/PCM | 超低功耗 |
+
+如果用 I2S 数字麦克风，整个方案简化为：
+```
+I2S Mic ──► BL702 I2S RX ──► DMA ──► 内存
+              (即插即用)
+```
+
+---
+
+## 3. 示例工程：`my_apps/pdm_mic`
+
+### 3.1 引脚配置
+
+| GPIO | 功能 | I2S 子功能 | 方向 |
+|---|---|---|---|
+| 0 | I2S_BCLK | I2S0_BCLK | 输出 (master clock) |
+| 1 | I2S_FS | I2S0_FS | 输出 (word select) |
+| 23 | I2S_DI | I2S0_RCLK_O_I2S0_DI | 输入 (data) |
+
+`config/pinmux_config.h` 覆盖了 bl702_dapplus 的默认配置，仅改以上三个 GPIO。
+
+### 3.2 软件架构
+
+```
+main.c
+  ├─ usb_stdio_init()          USB CDC ACM 输出
+  ├─ i2s_register()            I2S master, 16kHz, mono, 16-bit
+  ├─ dma_register(CH3)         DMA RX: I2S RDR → memory
+  ├─ device_read()             启动首帧 DMA
+  └─ dma_rx_cb()              中断回调：切换双缓冲 + 标记就绪
+       └─ compute_peak()       计算峰值 / 削波检测
+       └─ printf() via USB     每秒输出音频电平和削波警告
+```
+
+### 3.3 DMA 双缓冲
+
+```
+┌─────────┐     ┌─────────┐
+│ buf[0]  │←────│ buf[1]  │←──── I2S RDR (DMA RX)
+│ 处理中   │     │ 收集中   │
+└────┬────┘     └────┬────┘
+     │               │
+     └── callback ───┘ 两帧交替，无缝。
+```
+
+### 3.4 编译
+
+```bash
+./build.sh my_apps/pdm_mic
+```
+
+产物：`uf2_demos/pdm_mic.uf2` (280 blocks, 70KB)。
+
+### 3.5 运行输出
+
+烧录后打开 USB CDC ACM 串口，固件每秒打印一行：
+
+```
+=== I2S PDM Mic Example ===
+
+I2S0 opened (master, mono, 16kHz, 16-bit)
+DMA CH3 opened (I2S RX -> memory)
+
+Capturing... (printing audio level every second)
+Connect PDM→I2S bridge to GPIO0/1/23
+=====================================
+
+[  1] peak= 2100 (-23.9 dBFS)  blocks=32
+[  2] peak= 3400 (-19.7 dBFS)  blocks=32
+[  3] peak=    0 (-90.3 dBFS)  blocks=31       ← 静音
+[  4] peak=32760 ( -0.0 dBFS)  blocks=32 CLIP! ← 削波！
+```
+
+- `peak` — 秒内最大采样绝对值 (0–32767)
+- `dBFS` — 相对满刻度的分贝值
+- `CLIP!` — 检测到削波（信号超过 32760）
+
+---
+
+## 4. 参考资料
+
+已废弃（BL702 无 PDM 外设，仅作 SDK 分析参考）：
+
+| 文件 | 内容 |
+|---|---|
+| `regs/pdm_reg.h` | PDM 寄存器定义（**硅片上未实现**） |
+| `glb_reg.h` `PDM_CLK_CTRL` | PDM 时钟分频器（驱动存在但无外设） |
+| `glb_reg.h` `reg_i2s_clk_sel` | I2S BCLK 时钟源选择位 |
+
+生效资料：
+
+| 文件 | 内容 |
+|---|---|
+| `hal_drv/inc/hal_i2s.h` | I2S HAL 层 API（`i2s_device_t` 结构） |
+| `hal_drv/src/hal_i2s.c` | I2S HAL 实现（open/close/read/write/control） |
+| `std_drv/src/bl702_i2s.c` | I2S 底层寄存器驱动 |
+| `std_drv/inc/bl702_i2s.h` | I2S 配置结构体 `I2S_CFG_Type` |
+| `hal_drv/inc/hal_dma.h` | DMA 配置 (`DMA_REQUEST_I2S_RX=20`) |
+| `examples/i2s/i2s_play_from_record/` | I2S 环回示例（SDK 官方） |
+| `my_apps/pdm_probe/` | 硬件探针固件（本仓库） |
+| `my_apps/pdm_mic/` | **I2S PDM 例程（本仓库）** |
 
 关键寄存器结构：
 
