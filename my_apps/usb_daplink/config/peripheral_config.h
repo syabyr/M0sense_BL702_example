@@ -38,6 +38,12 @@
 
 /* PERIPHERAL With DMA LIST */
 
+/* UART0 (CDC ACM bridge) TX */
+#ifdef BSP_USING_UART0
+#define BSP_USING_DMA0_CH1
+#endif
+
+/* UART1 (debug log) TX */
 #ifdef BSP_USING_UART1
 #define BSP_USING_DMA0_CH2
 #endif
@@ -67,6 +73,22 @@
         .stopbits = UART_STOP_ONE,   \
         .parity = UART_PAR_NONE,     \
         .fifo_threshold = 64,        \
+    }
+#endif
+#endif
+
+#if defined(BSP_USING_DMA0_CH1)
+#ifndef DMA0_CH1_CONFIG
+#define DMA0_CH1_CONFIG                       \
+    {                                         \
+        .id = 0,                              \
+        .ch = 1,                              \
+        .direction = DMA_MEMORY_TO_PERIPH,    \
+        .transfer_mode = DMA_LLI_ONCE_MODE,   \
+        .src_req = DMA_REQUEST_NONE,          \
+        .dst_req = DMA_REQUEST_UART0_TX,      \
+        .src_width = DMA_TRANSFER_WIDTH_8BIT, \
+        .dst_width = DMA_TRANSFER_WIDTH_8BIT, \
     }
 #endif
 #endif

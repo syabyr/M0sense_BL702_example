@@ -4,6 +4,7 @@ set(TARGET_REQUIRED_LIBS usb_stack)
 set(TARGET_REQUIRED_PRIVATE_INCLUDE ${CMSIS_DAP_DIR}/Include ${BSP_COMMON_DIR}/usb
                                     ${CMAKE_CURRENT_LIST_DIR}/config)
 set(TARGET_REQUIRED_SRCS ${BSP_COMMON_DIR}/usb/usb_dc.c daplink_process.c winusb.c
+                         ${CMAKE_CURRENT_LIST_DIR}/uart_interface.c
                          ${CMSIS_DAP_DIR}/Source/DAP.c
                          ${CMSIS_DAP_DIR}/Source/JTAG_DP.c
                          ${CMSIS_DAP_DIR}/Source/SW_DP.c)

@@ -1,29 +1,22 @@
 /**
  * @file main.c
- * @brief
+ * @brief CMSIS-DAP v2 + CDC ACM composite device (usb_daplink)
+ *
+ * Interface 0 : CMSIS-DAP (vendor 0xFF, bulk EP1 OUT / EP2 IN)
+ * Interface 1 : CDC ACM communication (IAD, interrupt EP3)
+ * Interface 2 : CDC ACM data (bulk EP4 OUT / EP5 IN), bridged to UART0
+ *
+ * UART0 (GPIO14 TX / GPIO15 RX) is the virtual COM port.
+ * UART1 (GPIO25 TX) is reserved for debug log.
  *
  * Copyright (c) 2021 Bouffalolab team
- *
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.  The
- * ASF licenses this file to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the
- * License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
- * License for the specific language governing permissions and limitations
- * under the License.
- *
  */
 #include "hal_uart.h"
 #include "hal_usb.h"
 #include "usbd_core.h"
+#include "usbd_cdc.h"
 #include "usbd_winusb.h"
+#include "uart_interface.h"
 #include "hal_gpio.h"
 #include "bl702_sec_dbg.h"
 
@@ -39,20 +32,27 @@
 #define USBD_MAX_POWER     500
 #define USBD_LANGID_STRING 1033
 
-#define CMSIS_DAP_INTERFACE_SIZE (9 + 7 + 7)
-#define USB_CONFIG_SIZE          (9 + CMSIS_DAP_INTERFACE_SIZE)
+#define CMSIS_DAP_INTERFACE_SIZE (9 + 7 + 7) /* interface + 2 endpoints */
+#define USB_CONFIG_SIZE          (9 + CMSIS_DAP_INTERFACE_SIZE + CDC_ACM_DESCRIPTOR_LEN)
+
+/* Serial number string data offset inside rv_dap_plus_descriptor[]:
+ *   device(18) + config(9) + DAP iface(9) + EP(7) + EP(7) + CDC(66)
+ *   + LANGID(4) + mfr(18) + product(26) + 2 (bLength,bType) = 166 */
+#define SERIAL_STR_DATA_OFFSET 166
 
 /* Non-const: serial number is patched at runtime from unique chip ID. */
 static uint8_t rv_dap_plus_descriptor[] = {
     USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0x00, 0x00, 0x00, USBD_VID, USBD_PID, 0x0100, 0x01),
     /* Configuration 0 */
-    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x01, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
+    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x03, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
     /* Interface 0 (CMSIS-DAP) */
     USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x04),
     /* Endpoint OUT 1 */
     USB_ENDPOINT_DESCRIPTOR_INIT(CMSIS_DAP_EP_RECV, USB_ENDPOINT_TYPE_BULK, 0x40, 0x00),
     /* Endpoint IN 2 */
     USB_ENDPOINT_DESCRIPTOR_INIT(CMSIS_DAP_EP_SEND, USB_ENDPOINT_TYPE_BULK, 0x40, 0x00),
+    /* Interface 1/2 (CDC ACM) */
+    CDC_ACM_DESCRIPTOR_INIT(0x01, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, 0x00),
     /* String 0 (LANGID) */
     USB_LANGID_INIT(USBD_LANGID_STRING),
     /* String 1 (Manufacturer) */
@@ -148,6 +148,49 @@ static usbd_endpoint_t dap_endpoint_send = {
     .ep_cb = usb_dap_send_callback
 };
 
+/* ---- CDC ACM: virtual COM port bridged to UART0 ---- */
+static usbd_class_t cdc_class;
+static usbd_interface_t cdc_cmd_intf;
+static usbd_interface_t cdc_data_intf;
+
+static void usbd_cdc_acm_bulk_out(uint8_t ep)
+{
+    usb_dc_receive_to_ringbuffer(usb_fs, &usb_rx_rb, ep);
+}
+
+static void usbd_cdc_acm_bulk_in(uint8_t ep)
+{
+    usb_dc_send_from_ringbuffer(usb_fs, &uart0_rx_rb, ep);
+}
+
+static usbd_endpoint_t cdc_out_ep = {
+    .ep_addr = CDC_OUT_EP,
+    .ep_cb = usbd_cdc_acm_bulk_out
+};
+
+static usbd_endpoint_t cdc_in_ep = {
+    .ep_addr = CDC_IN_EP,
+    .ep_cb = usbd_cdc_acm_bulk_in
+};
+
+/* Weak-overridable CDC callbacks (defined in usbd_cdc.c as __weak). */
+void usbd_cdc_acm_set_line_coding(uint32_t baudrate, uint8_t databits, uint8_t parity, uint8_t stopbits)
+{
+    uart0_config(baudrate, (uart_databits_t)databits, (uart_parity_t)parity, (uart_stopbits_t)stopbits);
+}
+
+void usbd_cdc_acm_set_dtr(bool dtr)
+{
+    (void)dtr;
+    /* no hardware flow control on DAP COM port */
+}
+
+void usbd_cdc_acm_set_rts(bool rts)
+{
+    (void)rts;
+    /* no hardware flow control on DAP COM port */
+}
+
 /* Override debug UART to UART1 (GPIO25 TX for debug log output). */
 enum uart_index_type board_get_debug_uart_index(void)
 {
@@ -163,44 +206,46 @@ int main(void)
 {
     bflb_platform_init(0);
 
-    /* Patch USB serial number with unique chip ID (8 bytes → 16 hex chars).
-     * Serial string descriptor data starts at byte offset 100:
-     *   offset 98: bLength (0x22), offset 99: bDescriptorType, offset 100..131: data
-     */
+    /* Patch USB serial number with unique chip ID (8 bytes → 16 hex chars). */
     {
         uint8_t chip_id[8];
         static const char hex[] = "0123456789ABCDEF";
         Sec_Dbg_Read_Chip_ID(chip_id);
         for (int i = 0; i < 8; i++) {
-            rv_dap_plus_descriptor[100 + i * 4 + 0] = hex[(chip_id[i] >> 4) & 0x0F];
-            rv_dap_plus_descriptor[100 + i * 4 + 2] = hex[ chip_id[i]       & 0x0F];
+            rv_dap_plus_descriptor[SERIAL_STR_DATA_OFFSET + i * 4 + 0] = hex[(chip_id[i] >> 4) & 0x0F];
+            rv_dap_plus_descriptor[SERIAL_STR_DATA_OFFSET + i * 4 + 2] = hex[ chip_id[i]       & 0x0F];
         }
     }
 
-    // uart_ringbuffer_init();
-    // uart1_init();
-    // uart1_set_dtr_rts(UART_DTR_PIN, UART_RTS_PIN);
+    /* UART0 bridge for CDC ACM */
+    uart_ringbuffer_init();
+    uart0_init();
 
     usbd_desc_register(rv_dap_plus_descriptor);
 
     usbd_msosv1_desc_register(&msosv1_desc); /*register winusb*/
 
+    /* CMSIS-DAP interface */
     usbd_class_register(&dap_class);
     usbd_class_add_interface(&dap_class, &dap_interface);
     usbd_interface_add_endpoint(&dap_interface, &dap_endpoint_recv);
     usbd_interface_add_endpoint(&dap_interface, &dap_endpoint_send);
 
-    // usbd_cdc_add_acm_interface(&cdc_class, &cdc_cmd_intf);
-    // usbd_cdc_add_acm_interface(&cdc_class, &cdc_data_intf);
-    // usbd_interface_add_endpoint(&cdc_data_intf, &cdc_out_ep);
-    // usbd_interface_add_endpoint(&cdc_data_intf, &cdc_in_ep);
+    /* CDC ACM interface */
+    usbd_cdc_add_acm_interface(&cdc_class, &cdc_cmd_intf);
+    usbd_cdc_add_acm_interface(&cdc_class, &cdc_data_intf);
+    usbd_interface_add_endpoint(&cdc_data_intf, &cdc_out_ep);
+    usbd_interface_add_endpoint(&cdc_data_intf, &cdc_in_ep);
 
     gpio_init();
 
     usb_fs = usb_dc_init();
 
     if (usb_fs) {
-        device_control(usb_fs, DEVICE_CTRL_SET_INT, (void *)(USB_EP1_DATA_OUT_IT | USB_EP2_DATA_IN_IT));
+        /* EP1 OUT (DAP) | EP2 IN (DAP) | EP4 OUT (CDC) | EP5 IN (CDC) */
+        device_control(usb_fs, DEVICE_CTRL_SET_INT,
+                       (void *)(USB_EP1_DATA_OUT_IT | USB_EP2_DATA_IN_IT |
+                                USB_EP4_DATA_OUT_IT | USB_EP5_DATA_IN_IT));
     }
 
     while (!usb_device_is_configured()) {
@@ -209,6 +254,6 @@ int main(void)
 
     while (1) {
         usb_handle();
-        // uart_send_from_ringbuffer();
+        uart_send_from_ringbuffer();
     }
 }
