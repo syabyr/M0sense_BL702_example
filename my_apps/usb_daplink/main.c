@@ -6,7 +6,7 @@
  * Interface 1 : CDC ACM communication (IAD, interrupt EP3)
  * Interface 2 : CDC ACM data (bulk EP4 OUT / EP5 IN), bridged to UART0
  *
- * UART0 (GPIO14 TX / GPIO15 RX) is the virtual COM port.
+ * UART0 (GPIO14 TX / GPIO15 RX) is the virtual COM port (loopback test pins).
  * UART1 (GPIO25 TX) is reserved for debug log.
  *
  * Copyright (c) 2021 Bouffalolab team
@@ -42,7 +42,7 @@
 
 /* Non-const: serial number is patched at runtime from unique chip ID. */
 static uint8_t rv_dap_plus_descriptor[] = {
-    USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0x00, 0x00, 0x00, USBD_VID, USBD_PID, 0x0100, 0x01),
+    USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, 0x0100, 0x01),
     /* Configuration 0 */
     USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x03, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
     /* Interface 0 (CMSIS-DAP) */
@@ -155,6 +155,8 @@ static usbd_interface_t cdc_data_intf;
 
 static void usbd_cdc_acm_bulk_out(uint8_t ep)
 {
+    /* LED0 (GPIO9) toggles each time USB OUT data arrives. */
+    gpio_write(9, !gpio_read(9));
     usb_dc_receive_to_ringbuffer(usb_fs, &usb_rx_rb, ep);
 }
 
@@ -217,7 +219,7 @@ int main(void)
         }
     }
 
-    /* UART0 bridge for CDC ACM */
+    /* UART0 bridge for CDC ACM (GPIO14 TX / GPIO15 RX) */
     uart_ringbuffer_init();
     uart0_init();
 

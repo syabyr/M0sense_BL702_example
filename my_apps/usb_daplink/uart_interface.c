@@ -19,7 +19,10 @@
 uint8_t usb_rx_mem[USB_OUT_RINGBUFFER_SIZE] __attribute__((section(".system_ram")));
 uint8_t uart_rx_mem[UART_RX_RINGBUFFER_SIZE] __attribute__((section(".system_ram")));
 
-uint8_t src_buffer[UART_TX_DMA_SIZE] __attribute__((section(".tcm_code")));
+/* DMA source buffer must be in .system_ram (not .tcm_code) — the DMA master
+ * does not go through the CPU's TCM remap, so a .tcm_code buffer is read as
+ * 0xff garbage. */
+uint8_t src_buffer[UART_TX_DMA_SIZE] __attribute__((section(".system_ram")));
 
 struct device *uart0;
 struct device *dma_ch1;
@@ -33,6 +36,8 @@ static void uart_irq_callback(struct device *dev, void *args, uint32_t size, uin
 
     if (state == UART_EVENT_RX_FIFO || state == UART_EVENT_RTO) {
         if (size && size < Ring_Buffer_Get_Empty_Length(&uart0_rx_rb)) {
+            /* LED1 (GPIO17) toggles each time UART0 RX data arrives (loopback). */
+            gpio_write(17, !gpio_read(17));
             Ring_Buffer_Write(&uart0_rx_rb, (uint8_t *)args, size);
         }
     }
