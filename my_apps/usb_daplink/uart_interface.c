@@ -11,6 +11,7 @@
 #include "uart_interface.h"
 #include "hal_usb.h"
 #include "hal_dma.h"
+#include "bl702_glb.h"
 
 #define USB_OUT_RINGBUFFER_SIZE (8 * 1024)
 #define UART_RX_RINGBUFFER_SIZE (8 * 1024)
@@ -45,6 +46,20 @@ static void uart_irq_callback(struct device *dev, void *args, uint32_t size, uin
 
 void uart0_init(void)
 {
+    /* Explicitly route UART0 TX/RX to GPIO14/GPIO15.
+     *
+     * board_pin_mux_init() (run earlier by bflb_platform_init) handles UART
+     * function codes via (func & 0x07), which for GPIO_FUN_UART0_TX (0xF2)
+     * yields 2 = UART1_RTS — i.e. it MISROUTES UART0 TX to the wrong GLB UART
+     * signal slot, so UART0 never reaches the physical pins. This is the same
+     * proven setup the BL702 bootloader (hal_boot2_uart_gpio_init) uses for
+     * these exact pins, and runs after board_init so it overrides the bad
+     * routing. SIG slot = pin % 8: GPIO14->SIG6, GPIO15->SIG7. */
+    GLB_GPIO_Type uart0_pins[] = { GPIO_PIN_14, GPIO_PIN_15 };
+    GLB_GPIO_Func_Init(GPIO_FUN_UART, uart0_pins, 2);
+    GLB_UART_Fun_Sel((GPIO_PIN_14 % 8), GLB_UART_SIG_FUN_UART0_TXD);
+    GLB_UART_Fun_Sel((GPIO_PIN_15 % 8), GLB_UART_SIG_FUN_UART0_RXD);
+
     uart_register(UART0_INDEX, "uart0");
     uart0 = device_find("uart0");
 
